@@ -1,0 +1,166 @@
+---
+title: "Animal Crossing Text Analysis"
+author: "Josh Kong"
+date: "8/10/2020"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading the data
+```{r}
+library(tidyverse)
+library(tidytext)
+critic <- readr::read_tsv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-05/critic.tsv')
+user_reviews <- readr::read_tsv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-05-05/user_reviews.tsv')
+```
+
+
+## Exploring the critic data
+
+```{r}
+head(critic)
+
+critic %>% 
+  summarise(avg = mean(grade))
+#seems like critics really enjoyed this game
+
+critic %>% 
+  group_by(date) %>% 
+  summarise(avg_rating = mean(grade)) %>% 
+  ungroup() %>% 
+  ggplot(aes(date,avg_rating)) + 
+  geom_line()
+
+#how the ratings changed as the dates changed
+
+
+critic_unnested <- critic %>% 
+  unnest_tokens(word,text) %>%
+  add_count(publication) %>%
+  anti_join(stop_words, by = "word")
+
+#taking a look at the most viewed words
+critic_unnested %>% 
+  count(word, sort = TRUE)
+
+#taking a look at which of the words had the most positive impact on the game
+critic_unnested %>% 
+  group_by(word) %>% 
+  summarise(count = n(),
+            avg_rating = mean(grade)) %>% 
+  filter(count > 5) %>% 
+  arrange(desc(avg_rating))
+
+#is there a correlation between the length of the review and the rating?
+critic_unnested %>% 
+  group_by(publication) %>% 
+  ggplot(aes(n,grade)) + 
+  geom_point() + 
+  geom_smooth()
+
+#there doesn't seem to be a correlation between length of the review and the grade
+```
+
+
+## Analyzing User Reviews
+```{r}
+user_reviews %>% 
+  summarise(avg = mean(grade))
+#the average rating the users gave is a lot lower than the critics
+
+
+user_reviews %>% 
+  group_by(date) %>% 
+  summarise(avg_rating = mean(grade)) %>% 
+  ungroup() %>% 
+  ggplot(aes(date,avg_rating)) + 
+  geom_line()+
+  labs(title = "Average Review based on date") 
+
+user_unnested <- user_reviews %>% 
+  unnest_tokens(word,text) %>% 
+  add_count(user_name) %>% 
+  anti_join(stop_words, by = "word") %>% 
+  filter(n > 30)
+
+#which words were correlated with a positive impact on the game?
+user_unnested %>% 
+  group_by(word) %>% 
+  summarise(count = n(),
+            avg_ratings = mean(grade)) %>% 
+  filter(count > 30) %>% 
+  arrange(desc(avg_ratings)) %>% 
+  head(8) %>% 
+  mutate(word = fct_reorder(word,avg_ratings)) %>% 
+  ggplot(aes(word, avg_ratings, size = count)) + 
+  geom_point()+
+  coord_flip()
+
+#the word bombing is highly correlated with a positive rating. let's take a closer look at that
+user_bombing <- user_unnested %>% 
+  filter(word == "bombing") %>% 
+  count(user_name, sort = TRUE) %>% 
+  pull(user_name)
+
+user_reviews %>% 
+  filter(user_name %in% user_bombing)
+
+#people are usually saying "don't worry about the review bombing" which is something that seems to be happening in this game leading to lower reviews. this is why the word rating is highly correlated with a good review.
+
+
+#which words are correlated with a low review in the game
+user_unnested %>% 
+  group_by(word) %>% 
+  summarise(count = n(),
+            avg_ratings = mean(grade)) %>% 
+  filter(count > 30) %>% 
+  arrange(avg_ratings) %>% 
+  head(8) %>% 
+  mutate(word = fct_reorder(word,avg_ratings)) %>% 
+  ggplot(aes(word, avg_ratings, size = count)) + 
+  geom_point()+
+  coord_flip()
+```
+
+
+## Lasso Regression model
+```{r, fig.height = 7}
+library(glmnet)
+library(Matrix)
+library(broom)
+text_matrix <- user_unnested %>% 
+  count(user_name, word) %>% 
+  cast_sparse(user_name,word,n)
+
+grade <- user_reviews$grade[match(rownames(text_matrix),user_reviews$user_name)]
+lasso_model <- cv.glmnet(text_matrix,grade)
+plot(lasso_model)
+
+tidy(lasso_model$glmnet.fit) %>% 
+  filter(lambda == lasso_model$lambda.1se,
+         term != "(Intercept)") %>% 
+  mutate(term = fct_reorder(term,estimate)) %>% 
+  ggplot(aes(term,estimate,fill = estimate > 0))+
+  geom_col() + 
+  coord_flip()+
+  theme(legend.position = "none")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
